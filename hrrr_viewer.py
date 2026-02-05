@@ -2,12 +2,15 @@
 """
 HRRR Weather Model Viewer
 Fetches HRRR GRIB2 files from AWS S3, decodes them, and generates temperature visualizations
+Uses parallel processing for faster execution
 """
 
 import os
 import sys
 from datetime import datetime, timedelta
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend for parallel processing
 import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
@@ -15,6 +18,8 @@ import s3fs
 import xarray as xr
 import cfgrib
 from pathlib import Path
+from multiprocessing import Pool, cpu_count
+from functools import partial
 
 class HRRRViewer:
     def __init__(self, output_dir='output'):
@@ -109,32 +114,63 @@ class HRRRViewer:
         print(f"Saved: {filepath}")
         return filepath
     
-    def process_full_run(self, max_forecast_hours=48):
-        """Process full HRRR model run (0-48 hours)"""
+    def process_single_hour(self, model_time, forecast_hour):
+        """Process a single forecast hour (designed for parallel execution)"""
+        s3_path = self.construct_s3_path(model_time, forecast_hour)
+        
+        temp_f, lats, lons, ds = self.download_and_process_grib(s3_path, forecast_hour)
+        
+        if temp_f is not None:
+            filepath = self.create_temperature_map(temp_f, lats, lons, 
+                                                   model_time, forecast_hour)
+            return (forecast_hour, filepath)
+        else:
+            return (forecast_hour, None)
+    
+    def process_full_run(self, max_forecast_hours=48, num_workers=None):
+        """
+        Process full HRRR model run (0-48 hours) using parallel processing
+        
+        Args:
+            max_forecast_hours: Maximum forecast hour to process (default: 48)
+            num_workers: Number of parallel workers (default: cpu_count)
+        """
         model_time = self.get_latest_model_run()
+        
+        # Determine number of workers
+        if num_workers is None:
+            num_workers = min(cpu_count(), 8)  # Cap at 8 to avoid overwhelming S3
+        
         print(f"\n{'='*60}")
-        print(f"HRRR Model Viewer")
+        print(f"HRRR Model Viewer (Parallel Processing)")
         print(f"Model Run: {model_time.strftime('%Y-%m-%d %H:%M UTC')}")
         print(f"Processing forecast hours: 0-{max_forecast_hours}")
+        print(f"Parallel workers: {num_workers}")
         print(f"{'='*60}\n")
         
+        # Create list of forecast hours to process
+        forecast_hours = list(range(0, max_forecast_hours + 1))
+        
+        # Create partial function with model_time bound
+        process_func = partial(self.process_single_hour, model_time)
+        
+        # Process in parallel
         generated_files = []
         
-        for forecast_hour in range(0, max_forecast_hours + 1):
-            s3_path = self.construct_s3_path(model_time, forecast_hour)
+        with Pool(processes=num_workers) as pool:
+            results = pool.map(process_func, forecast_hours)
             
-            temp_f, lats, lons, ds = self.download_and_process_grib(s3_path, forecast_hour)
-            
-            if temp_f is not None:
-                filepath = self.create_temperature_map(temp_f, lats, lons, 
-                                                       model_time, forecast_hour)
-                generated_files.append(filepath)
-            else:
-                print(f"Skipping forecast hour {forecast_hour} due to errors")
+            # Sort results by forecast hour and collect successful ones
+            results.sort(key=lambda x: x[0])
+            for forecast_hour, filepath in results:
+                if filepath is not None:
+                    generated_files.append(filepath)
+                else:
+                    print(f"⚠ Warning: Failed to process forecast hour {forecast_hour}")
         
         print(f"\n{'='*60}")
         print(f"Processing Complete!")
-        print(f"Generated {len(generated_files)} images in {self.output_dir}")
+        print(f"Generated {len(generated_files)}/{len(forecast_hours)} images in {self.output_dir}")
         print(f"{'='*60}\n")
         
         return generated_files
@@ -144,8 +180,15 @@ def main():
     # Set forecast hours (default 48, can be overridden by environment variable)
     max_hours = int(os.getenv('HRRR_MAX_HOURS', '48'))
     
+    # Set number of workers (default auto-detect, can be overridden)
+    num_workers = os.getenv('HRRR_NUM_WORKERS')
+    if num_workers:
+        num_workers = int(num_workers)
+    else:
+        num_workers = None  # Auto-detect
+    
     viewer = HRRRViewer()
-    viewer.process_full_run(max_forecast_hours=max_hours)
+    viewer.process_full_run(max_forecast_hours=max_hours, num_workers=num_workers)
 
 if __name__ == '__main__':
     main()
