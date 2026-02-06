@@ -11,7 +11,7 @@ on:
       max_hours:
         description: 'Maximum forecast hours to process'
         required: false
-        default: '48'
+        default: '18'
 
 jobs:
   generate-hrrr-maps:
@@ -42,7 +42,7 @@ jobs:
     
     - name: Run HRRR viewer
       env:
-        HRRR_MAX_HOURS: ${{ github.event.inputs.max_hours || '48' }}
+        HRRR_MAX_HOURS: ${{ github.event.inputs.max_hours || '18' }}
       run: |
         python hrrr_viewer.py
     
@@ -109,7 +109,7 @@ jobs:
             <script>
                 // Get all PNG files and create gallery
                 const pngFiles = [];
-                const fileCount = 49; // 0-48 hours
+                const fileCount = 19; // 0-18 hours
                 
                 for (let i = 0; i < fileCount; i++) {
                     const filename = `hrrr_temp_f${i.toString().padStart(2, '0')}.png`;
