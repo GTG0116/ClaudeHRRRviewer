@@ -3,6 +3,8 @@
 HRRR Weather Model Viewer
 Fetches HRRR GRIB2 files from AWS S3, decodes them, and generates temperature visualizations
 Uses parallel processing for faster execution
+
+Note: HRRR provides 18-hour forecasts (F00-F18), updated hourly
 """
 
 import os
@@ -74,8 +76,8 @@ class HRRRViewer:
         print(f"[F{forecast_hour:02d}] Processing...", flush=True)
         
         try:
-            with timeout(60):  # 60 second timeout per file
-                # Open file directly from S3
+            with timeout(120):  # 120 second timeout per file (GRIB files are 15-30 MB)
+                # Open file directly from S3 directly from S3
                 with self.s3.open(s3_path, 'rb') as f:
                     # Read GRIB2 file using cfgrib
                     # Filter for 2-meter temperature
@@ -182,14 +184,19 @@ class HRRRViewer:
             print(f"[F{forecast_hour:02d}] ✗ Unexpected error: {e}", flush=True)
             return (forecast_hour, None, False)
     
-    def process_full_run(self, max_forecast_hours=48, num_workers=None):
+    def process_full_run(self, max_forecast_hours=18, num_workers=None):
         """
-        Process full HRRR model run (0-48 hours) using parallel processing
+        Process full HRRR model run (0-18 hours) using parallel processing
         
         Args:
-            max_forecast_hours: Maximum forecast hour to process (default: 48)
+            max_forecast_hours: Maximum forecast hour to process (default: 18, HRRR max)
             num_workers: Number of parallel workers (default: cpu_count)
         """
+        # HRRR only goes to 18 hours
+        if max_forecast_hours > 18:
+            print(f"⚠️  Warning: HRRR max is 18 hours, reducing from {max_forecast_hours}")
+            max_forecast_hours = 18
+            
         model_time = self.get_latest_model_run()
         
         # Determine number of workers
@@ -253,8 +260,15 @@ class HRRRViewer:
 
 def main():
     """Main execution function"""
-    # Set forecast hours (default 48, can be overridden by environment variable)
-    max_hours = int(os.getenv('HRRR_MAX_HOURS', '48'))
+    # HRRR provides 18-hour forecasts, not 48!
+    # Default to 18 hours unless overridden
+    max_hours = int(os.getenv('HRRR_MAX_HOURS', '18'))
+    
+    # Validate max hours
+    if max_hours > 18:
+        print(f"⚠️  WARNING: HRRR only provides 0-18 hour forecasts")
+        print(f"⚠️  Reducing from {max_hours} to 18 hours")
+        max_hours = 18
     
     # Set number of workers (default auto-detect, can be overridden)
     # Set to 1 for sequential processing
